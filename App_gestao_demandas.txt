@@ -1,0 +1,1344 @@
+managed implementation in class zbp_cds_gest_func unique;
+strict ( 2 );
+with draft;
+
+define behavior for ZICDS_GEST_FUNC alias Demanda
+persistent table ztb_gest_func
+draft table ztbd_gest_fun
+lock master total etag LocalLastChangedAt
+authorization master ( instance )
+etag master LastChangedAt
+{
+  create;
+  update;
+  delete;
+
+  draft action Edit;
+  draft action Activate;
+  draft action Discard;
+  draft action Resume;
+  draft determine action Prepare;
+
+  field ( readonly, numbering : managed ) DemandUuid;
+
+  // --- Campos obrigatórios ---
+  field ( mandatory ) Title, Mudanca, Modulo, Request, Tipodemanda;
+
+  // --- Campos Somente Leitura ---
+  field ( readonly : update ) DemandID;
+  field ( readonly ) Desenvolvedor, CreatedAt, CreatedBy, LastChangedAt, LastChangedBy;
+
+  // --- Determinations ---
+  determination assignId on save { create; }
+  determination setInitialStatus on save { create; }
+
+  // Determinations para envio de e-mail
+  determination sendEmailDemandaCriada on save { create; }
+  determination sendEmailDemandaEncerrada on modify { field Status; }
+
+  //---  Validações ---
+  validation validateRequiredFields on save { create; update; }
+
+  // --- Associações ---
+  association _Anexos { create; with draft; }
+  association _Comentarios { create; with draft; }
+
+  // --- Mapeamento ---
+  mapping for ztb_gest_func
+  {
+    DemandUUID     = demand_uuid;
+    DemandID       = demand_id;
+    Title          = title;
+    Description    = description;
+    Modulo         = modulo;
+    Subarea        = subarea;
+    Desenvolvedor  = desenvolvedor;
+    Mudanca        = mudanca;
+    Request        = request;
+    Status         = status;
+    Tipodemanda    = tipodemanda;
+    Hrsconsultest  = hrsconsultest;
+    Hrsinternasest = hrsinternasest;
+    Hrsabap        = hrsabap;
+    Valorgestao    = valorgestao;
+    Prioridade     = prioridade;
+    CreatedAt      = created_at;
+    CreatedBy      = created_by;
+    LastChangedAt  = last_changed_at;
+    LastChangedBy  = last_changed_by;
+  }
+}
+
+define behavior for ZICDS_GESTAO_FILES alias Anexo
+implementation in class zbp_cds_gest_func unique
+persistent table ztbt_gest_files
+draft table ztbtd_gest_files
+lock dependent by _Demanda
+authorization dependent by _Demanda
+etag master CreatedAt
+{
+  update;
+  delete;
+
+  field ( readonly, numbering : managed ) AttachmentUUID;
+
+  // Campos somente leitura
+  field ( readonly ) DemandUUID, CreatedAt, CreatedBy, FileSize;
+
+  // Associação para a demanda pai
+  association _Demanda;
+
+  determination calculateFileSize on save { field FileContent; } //Apenas quando esse campo mudar será acionado
+
+  // Mapeamento
+  mapping for ztbt_gest_files
+  {
+    AttachmentUUID = attachment_uuid;
+    DemandUUID     = demand_uuid;
+    Filename       = filename;
+    Mimetype       = mimetype;
+    FileContent    = file_content;
+    FileSize       = fize_size;
+    CreatedAt      = created_at;
+    CreatedBy      = created_by;
+  }
+}
+
+define behavior for ZICDS_GEST_COMENT alias Comentario
+persistent table ztbt_gest_coment
+draft table ztbd_gest_coment
+lock dependent by _Demanda
+authorization dependent by _Demanda
+etag master CreatedAt
+{
+  update;
+  delete;
+
+  field ( readonly, numbering : managed ) CommentUUID;
+
+  field ( mandatory ) CommentText;
+
+  field ( readonly ) DemandUUID, CreatedAt, CreatedBy;
+
+  determination sendComentario on modify { field CommentText; }
+
+  association _Demanda;
+
+  mapping for ztbt_gest_coment
+  {
+    CommentUUID = comment_uuid;
+    DemandUUID  = demand_uuid;
+    CommentText = comment_text;
+    CreatedAt   = created_at;
+    CreatedBy   = created_by;
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+CLASS zbp_cds_gest_func DEFINITION PUBLIC ABSTRACT FINAL FOR BEHAVIOR OF zicds_gest_func.
+
+  PUBLIC SECTION.
+    CLASS-METHODS send_email
+      IMPORTING
+        iv_demandid      TYPE zicds_gest_func-demandid
+        iv_titulo        TYPE zicds_gest_func-Title
+        iv_modulo        TYPE zicds_gest_func-modulo
+        iv_request       TYPE zicds_gest_func-Request
+        iv_mudanca       TYPE zicds_gest_func-Mudanca
+        iv_tipo_demanda  TYPE zicds_gest_func-Tipodemanda
+        iv_assunto       TYPE bcs_msg_subject
+        iv_sender        TYPE bcs_msg_sender
+        iv_tipo_evento   TYPE string OPTIONAL
+        iv_descricao     TYPE zicds_gest_func-Description OPTIONAL
+        iv_prioritario   TYPE zicds_gest_func-Prioridade OPTIONAL
+        iv_status        TYPE zicds_gest_func-status OPTIONAL
+        iv_comentario    TYPE string OPTIONAL
+        iv_desenvolvedor TYPE zicds_gest_func-desenvolvedor OPTIONAL.
+
+
+    CLASS-METHODS create_email_body
+      IMPORTING
+        iv_demandid     TYPE zicds_gest_func-demandid
+        iv_titulo       TYPE zicds_gest_func-Title
+        iv_request      TYPE zicds_gest_func-Request
+        iv_mudanca      TYPE zicds_gest_func-Mudanca
+        iv_tipo_demanda TYPE zicds_gest_func-Tipodemanda
+        iv_modulo       TYPE zicds_gest_func-modulo
+        iv_descricao    TYPE zicds_gest_func-Description OPTIONAL
+        iv_prioritario  TYPE zicds_gest_func-Prioridade OPTIONAL
+        iv_status       TYPE zicds_gest_func-status OPTIONAL
+        iv_comentario   TYPE string OPTIONAL
+      RETURNING
+        VALUE(rt_body)  TYPE soli_tab.
+
+ENDCLASS.
+
+CLASS zbp_cds_gest_func IMPLEMENTATION.
+
+  METHOD send_email.
+
+    DATA:
+      lo_send_request TYPE REF TO cl_bcs,
+      lo_document     TYPE REF TO cl_document_bcs,
+      lo_sender       TYPE REF TO cl_cam_address_bcs,
+      lo_recipient    TYPE REF TO cl_cam_address_bcs,
+      lt_recipients   TYPE TABLE OF mailaddress,
+      lt_body         TYPE soli_tab,
+      lv_subject      TYPE so_obj_des,
+      lv_sender       TYPE mailaddress,
+      lv_recipient    TYPE mailaddress.
+
+    TRY.
+        " Criar objeto de requisição de envio
+        lo_send_request = cl_bcs=>create_persistent( ).
+
+        lv_subject = iv_assunto.
+        lv_sender = iv_sender.
+
+        " Definir remetente
+        lo_sender = cl_cam_address_bcs=>create_internet_address(
+                      i_address_string = lv_sender ).
+        lo_send_request->set_sender( i_sender = lo_sender ).
+
+
+        SELECT EmailAddress
+        FROM zicds_gest_email
+        INTO TABLE @lt_recipients
+        WHERE UserEmail = @sy-uname.
+
+        IF iv_tipo_evento = 'CRIAÇÃO'.
+
+          DATA(lv_team_abap_email) = 'abap.coe@votorantim.com'.
+          APPEND lv_team_abap_email TO lt_recipients.
+
+        ELSE.
+
+          SELECT SINGLE EmailAddress
+          FROM zicds_gest_email
+          INTO @DATA(lv_dev)
+          WHERE UserEmail = @iv_desenvolvedor.
+
+          IF lv_dev IS NOT INITIAL.
+            APPEND lv_dev TO lt_recipients.
+          ENDIF.
+        ENDIF.
+
+        LOOP AT lt_recipients INTO lv_recipient.
+          lo_recipient = cl_cam_address_bcs=>create_internet_address(
+                           i_address_string = lv_recipient ).
+          lo_send_request->add_recipient(
+            EXPORTING
+              i_recipient = lo_recipient
+              i_express   = abap_true
+          ).
+        ENDLOOP.
+
+        " Criar corpo do e-mail
+        lt_body = create_email_body(
+          iv_demandid    = iv_demandid
+          iv_titulo      = iv_titulo
+          iv_modulo      = iv_modulo
+          iv_mudanca     = iv_mudanca
+          iv_request     = iv_request
+          iv_tipo_demanda = iv_tipo_demanda
+          iv_descricao   = iv_descricao
+          iv_prioritario = iv_prioritario
+          iv_status      = iv_status
+          iv_comentario  = iv_comentario
+        ).
+
+        " Criar documento
+        lo_document = cl_document_bcs=>create_document(
+          i_type      = 'HTM'
+          i_text      = lt_body
+          i_importance = '1'
+          i_subject   = lv_subject
+        ).
+
+        " Adicionar documento à requisição
+        lo_send_request->set_document( lo_document ).
+
+        lo_send_request->send(
+          EXPORTING
+            i_with_error_screen = abap_false
+        ).
+
+      CATCH cx_bcs INTO DATA(lo_bcs_exception).
+        RETURN.
+    ENDTRY.
+
+  ENDMETHOD.
+
+  METHOD create_email_body.
+
+    DATA:
+      lv_body       TYPE string_data,
+      lv_line       TYPE soli,
+      lv_offset     TYPE i,
+      lv_length     TYPE i,
+      lv_max_length TYPE i VALUE 255.
+
+    lv_body = |<html><body>|.
+
+    " Cabeçalho do e-mail
+    lv_body = |{ lv_body }<div style="background-color:#0066cc; padding:10px; color:white; font-family:Arial;">|.
+    lv_body = |{ lv_body }<h1>Gestão de Demandas</h1>|.
+    lv_body = |{ lv_body }</div>|.
+
+    " Conteúdo principal
+    lv_body = |{ lv_body }<div style="padding:15px; font-family:Arial;">|.
+    lv_body = |{ lv_body }<h2 style="color:#0066cc;">{ iv_titulo }</h2>|.
+
+    lv_body = |{ lv_body }<table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse; width:100%;">|.
+    lv_body = |{ lv_body }<tr bgcolor="#eeeeee"><th colspan="2" align="left">Informações da Demanda</th></tr>|.
+
+    lv_body = |{ lv_body }<tr><td width="30%"><b>Tipo de Demanda:</b></td><td>{ iv_tipo_demanda }</td></tr>|.
+    lv_body = |{ lv_body }<tr><td width="30%"><b>Request:</b></td><td>{ iv_request }</td></tr>|.
+    lv_body = |{ lv_body }<tr><td><b>Mudança:</b></td><td>{ iv_mudanca }</td></tr>|.
+
+    lv_body = |{ lv_body }<tr><td><b>Título:</b></td><td>{ iv_titulo }</td></tr>|.
+    lv_body = |{ lv_body }<tr><td><b>Módulo:</b></td><td>{ iv_modulo }</td></tr>|.
+
+    IF iv_descricao IS NOT INITIAL.
+      lv_body = |{ lv_body }<tr><td><b>Descrição:</b></td><td>{ iv_descricao }</td></tr>|.
+    ENDIF.
+
+    IF iv_prioritario IS NOT INITIAL.
+      DATA(lv_prioridade_texto) = COND #( WHEN iv_prioritario = 'X' THEN '<span style="color:red; font-weight:bold;">Alta</span>' ELSE 'Normal' ).
+      lv_body = |{ lv_body }<tr><td><b>Prioridade:</b></td><td>{ lv_prioridade_texto }</td></tr>|.
+    ENDIF.
+
+    IF iv_status IS NOT INITIAL.
+      lv_body = |{ lv_body }<tr><td><b>Status:</b></td><td>{ iv_status }</td></tr>|.
+    ENDIF.
+
+    IF iv_comentario IS NOT INITIAL.
+      lv_body = |{ lv_body }<tr><td><b>Comentário:</b></td><td>{ iv_comentario }</td></tr>|.
+    ENDIF.
+
+    lv_body = |{ lv_body }</table>|.
+
+    " Botão para acessar a demanda
+    lv_body = |{ lv_body }<p style="margin-top:20px;"><a href="https://fiori.empresa.com.br/gestaodemandas?DemandId={ iv_demandid }" style="background-color:#0066cc; color:white; padding:10px; text-decoration:none;">Acessar Demanda</a></p>|.
+    lv_body = |{ lv_body }</div>|.
+
+    " Rodapé
+    lv_body = |{ lv_body }<div style="background-color:#eeeeee; padding:10px; font-size:12px; color:#666666; font-family:Arial;">|.
+    lv_body = |{ lv_body }<p>Este é um e-mail automático do sistema de Gestão de Demandas. Por favor, não responda a este e-mail.</p>|.
+    lv_body = |{ lv_body }</div>|.
+    lv_body = |{ lv_body }</body></html>|.
+
+    " Converter string para tabela SOLI
+    lv_length = strlen( lv_body  ).
+    lv_offset = 0.
+
+    WHILE lv_offset < lv_length.
+      " Calcular o tamanho da próxima linha
+      DATA(lv_line_length) = nmin( val1 = lv_max_length val2 = lv_length - lv_offset ).
+
+      " Extrair a linha
+      lv_line = lv_body+lv_offset(lv_line_length).
+
+      APPEND lv_line TO rt_body.
+
+      " Atualizar o offset
+      lv_offset = lv_offset + lv_line_length.
+    ENDWHILE.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+CLASS lhc_comentario DEFINITION INHERITING FROM cl_abap_behavior_handler.
+
+  PRIVATE SECTION.
+
+    METHODS sendComentario FOR DETERMINE ON MODIFY
+      IMPORTING keys FOR Comentario~sendComentario.
+
+ENDCLASS.
+
+CLASS lhc_comentario IMPLEMENTATION.
+
+  METHOD sendComentario.
+
+    DATA: lv_assunto TYPE bcs_msg_subject.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+      ENTITY Comentario
+        ALL FIELDS
+        WITH CORRESPONDING #( keys )
+      RESULT DATA(lt_comentarios).
+
+    LOOP AT lt_comentarios ASSIGNING FIELD-SYMBOL(<fs_comentario>).
+
+
+      CHECK <fs_comentario>-%is_draft IS INITIAL.
+
+      IF  <fs_comentario>-CommentText IS NOT INITIAL .
+
+        DATA(lv_comentario) = <fs_comentario>-CommentText.
+
+      ENDIF.
+    ENDLOOP.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+      ENTITY Demanda
+       FIELDS ( DemandId )
+       WITH CORRESPONDING #( keys )
+       RESULT DATA(lt_result).
+
+
+    LOOP AT lt_result ASSIGNING FIELD-SYMBOL(<fs_demanda>).
+
+      IF lt_result IS NOT INITIAL.
+
+        lv_assunto = |Um Novo Comentário foi Adicionado a Demanda { <fs_demanda>-DemandId }|.
+
+        zbp_cds_gest_func=>send_email(
+          iv_tipo_evento   = 'NOVO COMENTÁRIO'
+          iv_demandid      = <fs_demanda>-DemandId
+          iv_titulo        = <fs_demanda>-Title
+          iv_modulo        = <fs_demanda>-Modulo
+          iv_mudanca       = <fs_demanda>-Mudanca
+          iv_request       = <fs_demanda>-Request
+          iv_tipo_demanda  = <fs_demanda>-Tipodemanda
+          iv_status        = <fs_demanda>-Status
+          iv_descricao     = <fs_demanda>-Description
+          iv_prioritario   = <fs_demanda>-Prioridade
+          iv_desenvolvedor = <fs_demanda>-Desenvolvedor
+          iv_sender        = 'gestaodemandas@votorantim.com'
+          iv_assunto       = lv_assunto
+          iv_comentario    = lv_comentario
+        ).
+      ENDIF.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lhc_anexo DEFINITION INHERITING FROM cl_abap_behavior_handler.
+
+  PRIVATE SECTION.
+
+    METHODS calculateFileSize FOR DETERMINE ON SAVE
+      IMPORTING keys FOR Anexo~calculateFileSize.
+
+ENDCLASS.
+
+CLASS lhc_anexo IMPLEMENTATION.
+
+  METHOD calculateFileSize.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+      ENTITY Anexo
+        FIELDS ( AttachmentUUID FileContent )
+        WITH CORRESPONDING #( keys )
+      RESULT DATA(lt_anexos).
+
+    CHECK lt_anexos IS NOT INITIAL.
+
+    DATA lt_anexos_to_update TYPE TABLE FOR UPDATE zicds_gest_func\\Anexo.
+
+    " Processar cada anexo
+    LOOP AT lt_anexos ASSIGNING FIELD-SYMBOL(<fs_anexo>).
+
+      DATA lv_size TYPE i.
+
+      IF <fs_anexo>-FileContent IS NOT INITIAL.
+        lv_size = xstrlen( <fs_anexo>-FileContent ).
+      ELSE.
+        lv_size = 0.
+      ENDIF.
+
+      " Converter para KB
+      lv_size = ceil( lv_size / 1024 ).
+
+*      IF lv_size > 1000. " 20MB in bytes.
+*
+*        lv_size = ceil( lv_size / 1024 ).
+*
+*        APPEND VALUE #( %tky = <fs_anexo>-%tky ) TO reported-anexo.
+*        APPEND VALUE #( %tky = <fs_anexo>-%tky
+*                        %msg = new_message( id = 'ZCL_GEST_FUNC_MSG'
+*                                            number = '004'
+*                                            severity = if_abap_behv_message=>severity-error
+*                                            v1 = lv_size
+*                                            v2 = '20MB' )
+*                       %element-FileContent = if_abap_behv=>mk-on ) TO reported-anexo.
+*        RETURN.
+*      ELSE.
+
+      APPEND VALUE #( %tky = <fs_anexo>-%tky
+                      FileSize = lv_size ) TO lt_anexos_to_update.
+
+*      ENDIF.
+    ENDLOOP.
+
+    " Atualizar os registros se houver alterações
+    IF lt_anexos_to_update IS NOT INITIAL.
+
+      MODIFY ENTITIES OF zicds_gest_func IN LOCAL MODE
+        ENTITY Anexo
+          UPDATE FIELDS ( FileSize )
+          WITH lt_anexos_to_update
+          FAILED DATA(lt_failed)
+          REPORTED DATA(lt_reported)
+          MAPPED DATA(lt_mapped).
+
+      reported = CORRESPONDING #( DEEP lt_reported ).
+
+    ENDIF.
+
+  ENDMETHOD.
+ENDCLASS.
+
+CLASS lhc_Demanda DEFINITION INHERITING FROM cl_abap_behavior_handler.
+
+  PRIVATE SECTION.
+
+    METHODS get_instance_authorizations FOR INSTANCE AUTHORIZATION
+      IMPORTING keys REQUEST requested_authorizations FOR Demanda RESULT result.
+
+    METHODS assignid FOR DETERMINE ON SAVE
+      IMPORTING keys FOR demanda~assignId.
+
+    METHODS validateRequiredFields FOR VALIDATE ON SAVE
+      IMPORTING keys FOR Demanda~validateRequiredFields.
+
+    METHODS setInitialStatus FOR DETERMINE ON SAVE
+      IMPORTING keys FOR Demanda~setInitialStatus.
+
+    METHODS sendEmailDemandaCriada FOR DETERMINE ON SAVE
+      IMPORTING keys FOR Demanda~sendEmailDemandaCriada.
+
+    METHODS sendEmailDemandaEncerrada FOR DETERMINE ON MODIFY
+      IMPORTING keys FOR Demanda~sendEmailDemandaEncerrada.
+
+ENDCLASS.
+
+CLASS lhc_Demanda IMPLEMENTATION.
+
+  METHOD get_instance_authorizations.
+  ENDMETHOD.
+
+
+  METHOD assignId.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+        ENTITY Demanda
+        FIELDS ( DemandId )
+        WITH CORRESPONDING #( keys )
+        RESULT DATA(lt_result).
+
+    LOOP AT lt_result ASSIGNING FIELD-SYMBOL(<fs_result>).
+
+      IF <fs_result>-DemandId IS INITIAL.
+
+        DATA: l_seq      TYPE numc5,
+              l_range_nr TYPE inri-nrrangenr VALUE '01'.
+
+        CALL FUNCTION 'NUMBER_GET_NEXT'
+          EXPORTING
+            object      = 'ZDMND'
+            nr_range_nr = l_range_nr
+          IMPORTING
+            number      = l_seq
+          EXCEPTIONS
+            OTHERS      = 1.
+        ASSERT sy-subrc = 0.
+
+        <fs_result>-DemandId = |{ l_seq WIDTH = 5 PAD = '0' }|.
+
+      ENDIF.
+    ENDLOOP.
+
+    MODIFY ENTITIES OF zicds_gest_func IN LOCAL MODE
+    ENTITY Demanda
+    UPDATE FIELDS ( DemandId )
+    WITH VALUE #( FOR ls_result IN lt_result
+                (   DemandUuid = ls_result-DemandUuid
+                    DemandId = ls_result-DemandId ) )
+                    MAPPED DATA(ls_mapped)
+                    FAILED DATA(ls_failed)
+                    REPORTED DATA(lr_reported).
+
+    reported-demanda = CORRESPONDING #( lr_reported-demanda ).
+
+  ENDMETHOD.
+
+  METHOD validateRequiredFields.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+      ENTITY Demanda
+        FIELDS ( Title Modulo Mudanca Request Tipodemanda )
+        WITH CORRESPONDING #( keys )
+      RESULT DATA(lt_demandas)
+      FAILED DATA(lt_failed).
+
+    " Verificar campos obrigatórios
+    LOOP AT lt_demandas ASSIGNING FIELD-SYMBOL(<fs_demanda>).
+
+      IF <fs_demanda>-Title IS INITIAL.
+        APPEND VALUE #( %tky = <fs_demanda>-%tky
+                        %msg = new_message( id       = 'ZCL_GEST_FUNC_MSG'
+                                           number   = '001'
+                                           severity = if_abap_behv_message=>severity-error
+                                           v1       = 'Título' ) ) TO reported-demanda.
+        CONTINUE.
+      ENDIF.
+
+      IF <fs_demanda>-Modulo IS INITIAL.
+        APPEND VALUE #( %tky = <fs_demanda>-%tky
+                        %msg = new_message( id       = 'ZCL_GEST_FUNC_MSG'
+                                           number   = '001'
+                                           severity = if_abap_behv_message=>severity-error
+                                           v1       = 'Demanda' ) ) TO reported-demanda.
+        CONTINUE.
+      ENDIF.
+
+      IF <fs_demanda>-Mudanca IS INITIAL.
+        APPEND VALUE #( %tky = <fs_demanda>-%tky
+                        %msg = new_message( id       = 'ZCL_GEST_FUNC_MSG'
+                                           number   = '001'
+                                           severity = if_abap_behv_message=>severity-error
+                                           v1       = 'Mudança' ) ) TO reported-demanda.
+        CONTINUE.
+      ENDIF.
+
+      IF <fs_demanda>-Request IS INITIAL.
+        APPEND VALUE #( %tky = <fs_demanda>-%tky
+                        %msg = new_message( id       = 'ZCL_GEST_FUNC_MSG'
+                                           number   = '001'
+                                           severity = if_abap_behv_message=>severity-error
+                                           v1       = 'Request' ) ) TO reported-demanda.
+        CONTINUE.
+      ENDIF.
+
+      IF <fs_demanda>-Tipodemanda IS INITIAL.
+        APPEND VALUE #( %tky = <fs_demanda>-%tky
+                        %msg = new_message( id       = 'ZCL_GEST_FUNC_MSG'
+                                           number   = '001'
+                                           severity = if_abap_behv_message=>severity-error
+                                           v1       = 'Tipo de Demanda' ) ) TO reported-demanda.
+        CONTINUE.
+      ENDIF.
+    ENDLOOP.
+  ENDMETHOD.
+
+  METHOD setInitialStatus.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+       ENTITY Demanda
+         FIELDS ( Status )
+         WITH CORRESPONDING #( keys )
+       RESULT DATA(lt_demandas).
+
+    DATA lt_demandas_to_update TYPE TABLE FOR UPDATE zicds_gest_func\\Demanda.
+
+    LOOP AT lt_demandas ASSIGNING FIELD-SYMBOL(<fs_demanda>).
+      IF <fs_demanda>-Status IS INITIAL.
+        APPEND VALUE #( %tky = <fs_demanda>-%tky
+                        Status = 'A INICIAR' ) TO lt_demandas_to_update.
+      ENDIF.
+    ENDLOOP.
+
+    " Atualizar os registros se houver alterações
+    IF lt_demandas_to_update IS NOT INITIAL.
+      MODIFY ENTITIES OF zicds_gest_func IN LOCAL MODE
+        ENTITY Demanda
+          UPDATE FIELDS ( Status )
+          WITH lt_demandas_to_update.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD sendEmailDemandaCriada.
+
+    DATA: lv_assunto TYPE bcs_msg_subject.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+      ENTITY Demanda
+        ALL FIELDS
+        WITH CORRESPONDING #( keys )
+      RESULT DATA(lt_demandas).
+
+    LOOP AT lt_demandas ASSIGNING FIELD-SYMBOL(<fs_demanda>).
+
+      CHECK <fs_demanda>-%is_draft IS INITIAL.
+
+      lv_assunto = |Nova Demanda: { <fs_demanda>-Title }|.
+
+      zbp_cds_gest_func=>send_email(
+        iv_tipo_evento   = 'CRIAÇÃO'
+        iv_demandid      = <fs_demanda>-DemandId
+        iv_titulo        = <fs_demanda>-Title
+        iv_modulo        = <fs_demanda>-Modulo
+        iv_mudanca       = <fs_demanda>-Mudanca
+        iv_request       = <fs_demanda>-Request
+        iv_tipo_demanda  = <fs_demanda>-Tipodemanda
+        iv_descricao     = <fs_demanda>-Description
+        iv_prioritario   = <fs_demanda>-Prioridade
+        iv_desenvolvedor = <fs_demanda>-Desenvolvedor
+        iv_sender        = 'gestaodemandas@votorantim.com'
+        iv_assunto       = lv_assunto
+      ).
+    ENDLOOP.
+
+  ENDMETHOD.
+
+  METHOD sendEmailDemandaEncerrada.
+
+    DATA: lv_assunto TYPE bcs_msg_subject.
+
+    READ ENTITIES OF zicds_gest_func IN LOCAL MODE
+      ENTITY Demanda
+        ALL FIELDS
+        WITH CORRESPONDING #( keys )
+      RESULT DATA(lt_demandas).
+
+    " Enviar e-mail apenas para demandas que mudaram para status "ENCERRADO"
+    LOOP AT lt_demandas ASSIGNING FIELD-SYMBOL(<fs_demanda>).
+
+      IF  <fs_demanda>-Status = 'ENCERRADO'.
+
+        CHECK <fs_demanda>-%is_draft IS INITIAL.
+
+        lv_assunto = |Demanda Encerrada: { <fs_demanda>-Title }|.
+
+        zbp_cds_gest_func=>send_email(
+          iv_tipo_evento   = 'ENCERRAMENTO'
+          iv_demandid      = <fs_demanda>-DemandId
+          iv_titulo        = <fs_demanda>-Title
+          iv_modulo        = <fs_demanda>-Modulo
+          iv_mudanca       = <fs_demanda>-Mudanca
+          iv_request       = <fs_demanda>-Request
+          iv_tipo_demanda  = <fs_demanda>-Tipodemanda
+          iv_status        = <fs_demanda>-Status
+          iv_descricao     = <fs_demanda>-Description
+          iv_prioritario   = <fs_demanda>-Prioridade
+          iv_desenvolvedor = <fs_demanda>-Desenvolvedor
+          iv_sender        = 'gestaodemandas@votorantim.com'
+          iv_assunto       = lv_assunto
+        ).
+      ENDIF.
+    ENDLOOP.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+
+
+
+
+
+
+
+
+
+
+
+**********METADATA EXTENSION
+
+@Metadata.layer: #CUSTOMER
+
+@UI: {
+  headerInfo: {
+    typeName: 'Comentário',
+    typeNamePlural: 'Comentários',
+    typeImageUrl: 'sap-icon://comment'
+  }
+ }
+
+
+annotate entity ZCCDS_GEST_COMENT with
+{
+
+  @UI.facet: [
+    { id: 'HeaderInfo', purpose: #HEADER, type: #DATAPOINT_REFERENCE, targetQualifier: 'Description' },
+    { id: 'Comentario', purpose: #STANDARD, type: #FIELDGROUP_REFERENCE, targetQualifier: 'ComentGroup' },
+    { id: 'AdminData', parentId: 'Comentario', type: #FIELDGROUP_REFERENCE, label: 'Dados Administrativos', position: 20, targetQualifier: 'AdminDataGroup' }
+  ]
+
+  @UI.hidden: true
+  CommentUuid;
+
+  @UI.hidden: true
+  DemandUuid;
+
+  @UI.lineItem: [{ position: 10, importance: #HIGH, label: 'Comentários'}]
+  @UI.identification: [{ position: 10, label: 'Comentários' }]
+  @UI.fieldGroup:     [ { qualifier: 'ComentGroup', position: 10, label: 'Comentário' } ] //Posição no agrupamento
+  @UI.multiLineText: true
+  CommentText;
+
+  @UI.lineItem: [{ position: 20, importance: #HIGH, label: 'Criado Em'}]
+  @UI.identification: [{ position: 20, label: 'Criado Em' }]
+  @UI.fieldGroup:     [ { qualifier: 'AdminDataGroup', position: 10, label: 'Criado Em' } ] //Posição no agrupamento
+  CreatedAt;
+
+  @UI.lineItem: [{ position: 30, importance: #HIGH, label: 'Criado Por'}]
+  @UI.identification: [{ position: 30, label: 'Criado Por' }]
+  @UI.fieldGroup:     [ { qualifier: 'AdminDataGroup', position: 20, label: 'Criado Por' } ] //Posição no agrupamento
+  @UI.dataPoint: { qualifier: 'Description', title: 'Comentários e Observações' }
+  CreatedBy;
+
+}
+
+
+
+
+
+
+@Metadata.layer: #CUSTOMER
+
+@UI: {
+  headerInfo: {
+    typeName: 'Cadastro de Email',
+    typeNamePlural: 'Cadastro de Emails',
+    typeImageUrl: 'sap-icon://email' ,
+    title: { type: #STANDARD, value: 'EmailAddress'}
+  }
+ }
+
+
+annotate entity ZCCDS_GEST_EMAIL with
+{
+  @UI.facet: [
+    { id: 'EmailDetails', type: #FIELDGROUP_REFERENCE, label: 'Cadastro de Email para Notificação',   position: 10, targetQualifier: 'EmailGroup' }
+  ]
+
+  @UI.lineItem: [{ position: 10, importance: #HIGH, label: 'Usuário SAP'}]
+  @UI.identification: [{ position: 10, label: 'Usuário' }]
+  @UI.fieldGroup:     [ { qualifier: 'EmailGroup', position: 10, label: 'Usuário SAP' } ]
+  UserEmail;
+
+  @UI.lineItem: [{ position: 20, importance: #MEDIUM, label: 'Email'  }]
+  @UI.identification: [{ position: 20, label: 'Email' }]
+  @UI.fieldGroup:     [ { qualifier: 'EmailGroup', position: 20, label: 'Email' } ]
+  EmailAddress;
+
+}
+
+
+
+
+
+@Metadata.layer: #CUSTOMER
+
+@UI: {
+  headerInfo: {
+    typeName: 'Anexo',
+    typeNamePlural: 'Anexos',
+    typeImageUrl: 'sap-icon://attachment' ,
+    title: { type: #STANDARD, label: 'Anexo'}
+  }
+  }
+
+annotate view ZCCDS_GEST_FILE with
+{
+  @UI.facet: [
+    { id: 'HeaderInfo', purpose: #HEADER, type: #DATAPOINT_REFERENCE, targetQualifier: 'Description' },
+    { id: 'Anexo', purpose: #STANDARD, type: #COLLECTION, position: 10 },
+    { id: 'UploadFile', parentId: 'Anexo', type: #FIELDGROUP_REFERENCE, label: 'Seleção do Arquivo', position: 10, targetQualifier: 'UploadFileGroup' },
+    { id: 'DataFile', parentId: 'Anexo', type: #FIELDGROUP_REFERENCE, label: 'Dados do Arquivo', position: 20, targetQualifier: 'DataFileGroup' },
+    { id: 'AdminData', parentId: 'Anexo', type: #FIELDGROUP_REFERENCE, label: 'Dados Administrativos', position: 30, targetQualifier: 'AdminDataGroup' }
+  ]
+
+  @UI.lineItem: [{ position: 10, importance: #HIGH, label: 'Arquivo'}]
+  @UI.identification: [{ position: 10, label: 'Selecionar Arquivo' }]
+  @UI.fieldGroup:     [ { qualifier: 'UploadFileGroup', position: 10, label: 'Selecione o Arquivo' } ] //Posição no agrupamento
+  FileContent;
+
+  @UI.lineItem: [{ position: 20, importance: #MEDIUM, label: 'Nome do Arquivo'  }]
+  @UI.dataPoint: { qualifier: 'Description', title: 'Nome do Arquivo' }
+  @UI.identification: [{ position: 20, label: 'Nome do Arquivo' }]
+  Filename;
+
+  @UI.hidden: true
+  Mimetype;
+
+  @UI.lineItem: [{ position: 35, importance: #MEDIUM, label: 'Tamanho (KB)' }]
+  FileSize;
+
+  @UI.lineItem: [{ position: 40, importance: #LOW, label: 'Enviado por' }]
+  @UI.identification: [{ position: 40, label: 'Enviado por' }]
+  @UI.fieldGroup:     [ { qualifier: 'AdminDataGroup', position: 10, label: 'Enviado por' } ]
+  CreatedBy;
+
+  @UI.lineItem: [{ position: 50, importance: #LOW, label: 'Enviado em' }]
+  @UI.identification: [{ position: 50, label: 'Enviado em' }]
+  @UI.fieldGroup:     [ { qualifier: 'AdminDataGroup', position: 20, label: 'Enviado em' } ]
+  CreatedAt;
+}
+
+
+
+
+@Metadata.layer: #CUSTOMER
+
+  //──────────────────────────────────────────────────────────
+  // Header da Object Page
+  //──────────────────────────────────────────────────────────
+@UI.headerInfo: {
+  typeName       : 'Demanda Funcional',
+  typeNamePlural : 'Demandas Funcionais',
+   imageUrl      : 'Icon',
+  title          : { type: #STANDARD, label: 'Título', value: 'Title' }
+  }
+
+@UI.lineItem: [ { criticality: 'PriorityCriticality' } ] // Destaca a cor do crit. no inicio da linha
+
+@UI.presentationVariant: [{ // ordenação
+     qualifier: 'OrderPriority',
+     sortOrder: [{ by: 'PriorityIcon',
+                   direction: #ASC }]
+}]
+
+@UI.selectionVariant: [{
+    qualifier: 'FilterStatus',
+    text:   'Demandas Ativas',
+    filter: 'Status EQ "A INICIAR" AND Status EQ "EM TESTE" AND Status EQ "EM ANDAMENTO"'
+ }]
+
+@UI.selectionPresentationVariant: [{
+   id: 'DemandAtiva',
+   text: 'Demandas Ativas',
+   presentationVariantQualifier: 'OrderPriority',
+   selectionVariantQualifier: 'FilterStatus'
+ }]
+
+annotate entity ZCCDS_GEST_FUNC with
+{
+  //──────────────────────────────────────────────────────────
+  // Object Page Facets – Tela Detalhes da Linha
+  //──────────────────────────────────────────────────────────
+  @UI.facet: [
+    { id: 'HeaderInfo',
+      purpose: #HEADER,            //Insere informações no cabeçalho
+      type: #DATAPOINT_REFERENCE, // Insere infos ao lado do Ícone
+      targetQualifier: 'Description' },
+
+    { id: 'GeneralInfo',
+      purpose: #STANDARD,  // cria novas Seções/ Abas
+      type: #COLLECTION,  // Agrupa os campos 
+      label: 'Informações Gerais'},
+
+    { id: 'Attachments',
+      purpose: #STANDARD,
+      type: #LINEITEM_REFERENCE, // Criar tabela do Child
+      label: 'Anexos',
+      targetElement: '_Anexos' },
+
+    { id: 'Coments',
+      purpose: #STANDARD,
+      type: #LINEITEM_REFERENCE,
+      label: 'Comentários',
+      targetElement: '_Comentarios' },
+
+    { id: 'DemandDetails',
+      parentId: 'GeneralInfo',
+      type: #FIELDGROUP_REFERENCE, // Agrupas em seções os input
+      label: 'Detalhes da Demanda',
+      position: 10,
+      targetQualifier: 'DemandDetailsGroup' },
+
+    { id: 'StatusPriority',
+      parentId: 'GeneralInfo',
+      type: #FIELDGROUP_REFERENCE,
+      label: 'Status e Prioridade',
+      position: 20,
+      targetQualifier: 'StatusPriorityGroup' },
+
+    { id: 'AdminData',
+      parentId: 'GeneralInfo',
+      type: #FIELDGROUP_REFERENCE,
+      label: 'Dados Administrativos',
+      position: 30,
+      targetQualifier: 'AdminDataGroup' }
+  ]
+
+  //──────────────────────────────────────────────────────────
+  // Prioridade
+  //──────────────────────────────────────────────────────────
+  // checkbox - Ocultar da lista, mas manter em formulários
+  @UI.fieldGroup: [ { qualifier: 'StatusPriorityGroup', position: 20, label: 'Prioritário?' } ]
+  Prioridade;
+
+  //──────────────────────────────────────────────────────────
+  // DemandID
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'ID Demanda'
+  @UI.lineItem:       [ { position: 10, label: 'ID Demanda', cssDefault.width: '3em' } ] // Posição da coluna no list
+  @UI.selectionField: [ { position: 10 } ] //Posição do search do campo no cabeçalho
+  @UI.fieldGroup:     [ { qualifier: 'DemandDetailsGroup', position: 10, label: 'ID Demanda' } ] //Posição no agrupamento
+  DemandId;
+
+  //──────────────────────────────────────────────────────────
+  // Title
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Título'
+  @UI.lineItem:       [ { position: 20, label: 'Título' } ]
+  @UI.fieldGroup:     [ { qualifier: 'DemandDetailsGroup', position: 20, label: 'Título' } ]
+  Title;
+
+  //──────────────────────────────────────────────────────────
+  // Description
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Descrição'
+  @UI.multiLineText: true
+  @UI.lineItem:   [ { position: 25, label: 'Descrição', cssDefault.width: '30em' } ]
+  @UI.fieldGroup: [ { qualifier: 'DemandDetailsGroup', position: 30, label: 'Descrição'} ]
+  @UI.dataPoint: { qualifier: 'Description', title: 'Descrição da Demanda' } //Referenciar no Header
+  Description;
+
+  //──────────────────────────────────────────────────────────
+  // Prioridade Flag
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Prioridade'
+  @UI.lineItem: [
+  { position: 26,
+    label: 'Prioridade',
+    importance: #HIGH,
+    cssDefault.width: '5em',
+    criticality: 'PriorityCriticality',
+    criticalityRepresentation: #WITHOUT_ICON } ]
+  PriorityIcon;
+
+  //──────────────────────────────────────────────────────────
+  // Módulo
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Módulo'
+  @UI.lineItem:       [ { position: 30, label: 'Módulo', cssDefault.width: '5em' } ]
+  @UI.selectionField: [ { position: 30 } ]
+  @UI.fieldGroup:     [ { qualifier: 'DemandDetailsGroup', position: 40, label: 'Módulo' } ]
+  Modulo;
+
+  //──────────────────────────────────────────────────────────
+  // Mudança
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Mudança'
+  @UI.lineItem:   [ { position: 40, label: 'Mudança' } ]
+  @UI.fieldGroup: [ { qualifier: 'DemandDetailsGroup', position: 60, label: 'Mudança' } ]
+  Mudanca;
+
+  //──────────────────────────────────────────────────────────
+  // Request
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Request'
+  @UI.lineItem:   [ { position: 50, label: 'Request', cssDefault.width: '9em' } ]
+  @UI.fieldGroup: [ { qualifier: 'DemandDetailsGroup', position: 70, label: 'Request' } ]
+  Request;
+
+  //──────────────────────────────────────────────────────────
+  // Status
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Status'
+  @UI.lineItem:       [ { position: 60, label: 'Status', criticality: 'StatusCriticality' } ]
+  @UI.selectionField: [ { position: 40 } ]
+  @UI.fieldGroup:     [ { qualifier: 'StatusPriorityGroup', position: 10, label: 'Status', criticality: 'StatusCriticality' } ]
+  @UI.statusInfo:     [ { position: 10, label: 'Status',    value: 'Status',    criticality: 'StatusCriticality' } ]
+  Status;
+
+  //──────────────────────────────────────────────────────────
+  // Última Modificação (ChangedAt)
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Modificado em'
+  @UI.lineItem:   [ { position: 80, label: 'Última Modificação' } ]
+  @UI.fieldGroup: [ { qualifier: 'AdminDataGroup', position: 30, label: 'Modificado em' } ]
+  LastChangedAt;
+
+  //──────────────────────────────────────────────────────────
+  // Subárea
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Subárea'
+  @UI.fieldGroup: [ { qualifier: 'DemandDetailsGroup', position: 50, label: 'Subárea' } ]
+  Subarea;
+
+  //──────────────────────────────────────────────────────────
+  // Tipo de Demanda
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Tipo de Demanda'
+  @UI.fieldGroup: [ { qualifier: 'DemandDetailsGroup', position: 80, label: 'Tipo de Demanda' } ]
+  @UI.selectionField: [ { position: 50 } ]
+  Tipodemanda;
+
+  //──────────────────────────────────────────────────────────
+  // Desenvolvedor
+  //──────────────────────────────────────────────────────────
+
+  @EndUserText.label: 'Desenvolvedor'
+  @UI.fieldGroup: [ { qualifier: 'AdminDataGroup', position: 09, label: 'Desenvolvedor' } ]
+  @UI.selectionField: [ { position: 60 } ]
+  Desenvolvedor;
+
+  //──────────────────────────────────────────────────────────
+  // Criado em / Criado por
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Criado em'
+  @UI.fieldGroup: [ { qualifier: 'AdminDataGroup', position: 10, label: 'Criado em' } ]
+  @UI.selectionField: [ { position: 70 } ]
+  CreatedAt;
+
+  @EndUserText.label: 'Criado por'
+  @UI.fieldGroup: [ { qualifier: 'AdminDataGroup', position: 20, label: 'Criado por' } ]
+  CreatedBy;
+
+  //──────────────────────────────────────────────────────────
+  // Modificado por
+  //──────────────────────────────────────────────────────────
+  @EndUserText.label: 'Modificado por'
+  @UI.fieldGroup: [ { qualifier: 'AdminDataGroup', position: 40, label: 'Modificado por' } ]
+  LastChangedBy;
+
+};
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Consumption - Gestão de Demandas'
+@Metadata.ignorePropagatedAnnotations: false
+@Metadata.allowExtensions: true
+define root view entity ZCCDS_GEST_FUNC
+  as projection on ZICDS_GEST_FUNC
+{
+
+  key DemandUuid,
+      DemandId,
+      Title,
+      Description,
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZICDS_GEST_MOD', element: 'DescModulo' }, useForValidation: true }]
+      Modulo,
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZICDS_GEST_SUBAREA', element: 'DescrSubarea' }, useForValidation: true }]
+      Subarea,
+      Desenvolvedor,
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZICDS_GEST_FUNC', element: 'Mudanca' } }]
+      Mudanca,
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZICDS_GEST_FUNC', element: 'Request' } }]
+      Request,
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZICDS_GEST_STATUS', element: 'StatusText' }, useForValidation: true }]
+      Status,
+      @Consumption.valueHelpDefinition: [{ entity: { name: 'ZICDS_GEST_TPDEMAN', element: 'DescrTpdeman' }, useForValidation: true }]
+      Tipodemanda,
+      Hrsconsultest,
+      Hrsinternasest,
+      Hrsabap,
+      Valorgestao,
+      Prioridade,
+      @Consumption.filter: { selectionType: #INTERVAL }
+      CreatedAt,
+      CreatedBy,
+      LastChangedBy,
+      LastChangedAt,
+      LocalLastChangedAt,
+      Icon,
+      PriorityIcon,
+      StatusCriticality,
+      PriorityCriticality,
+      /* Associations */
+      _Anexos      : redirected to composition child ZCCDS_GEST_FILE,
+      _Comentarios : redirected to composition child ZCCDS_GEST_COMENT
+}
+
+
+
+
+
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Composition - Demandas Funcionais'
+@Metadata.ignorePropagatedAnnotations: false
+@ObjectModel.usageType:{
+  serviceQuality: #X,
+  sizeCategory: #S,
+  dataClass: #MIXED
+}
+/*+[hideWarning] { "IDS" : [ "CARDINALITY_CHECK" ]  } */
+define root view entity ZICDS_GEST_FUNC
+  as select from ztb_gest_func
+  composition [0..*] of ZICDS_GESTAO_FILES as _Anexos
+  composition [0..*] of ZICDS_GEST_COMENT  as _Comentarios
+  association [1..1] to ZICDS_GEST_STATUS  as _StatusDemanda on $projection.Status = _StatusDemanda.StatusText
+  association [1..1] to ZICDS_GEST_TPDEMAN as _TpDemanda     on $projection.Tipodemanda = _TpDemanda.DescrTpdeman
+{
+  key demand_uuid               as DemandUuid,
+      demand_id                 as DemandId,
+      title                     as Title,
+      description               as Description,
+      modulo                    as Modulo,
+      subarea                   as Subarea,
+      desenvolvedor             as Desenvolvedor,
+      mudanca                   as Mudanca,
+      request                   as Request,
+      status                    as Status,
+      _StatusDemanda.StatusText as StatusText,
+      tipodemanda               as Tipodemanda,
+      _TpDemanda.DescrTpdeman   as DescricaoTpDemanda,
+      hrsconsultest             as Hrsconsultest,
+      hrsinternasest            as Hrsinternasest,
+      hrsabap                   as Hrsabap,
+      valorgestao               as Valorgestao,
+      prioridade                as Prioridade,
+      
+      // Campos de Criação são necessários para gerenciamento do RAP - managed
+      @Semantics.systemDateTime.createdAt: true
+      created_at                as CreatedAt,
+      @Semantics.user.createdBy: true
+      created_by                as CreatedBy,
+      @Semantics.user.lastChangedBy: true
+      last_changed_by           as LastChangedBy,
+      @Semantics.systemDateTime.lastChangedAt: true
+      last_changed_at           as LastChangedAt,
+      @Semantics.systemDateTime.localInstanceLastChangedAt: true
+      local_last_changed_at     as LocalLastChangedAt,   
+      
+      // Campos virtuais para criticality 
+      case prioridade
+        when 'X' then 1  // Alta - Vermelho
+        else 0
+      end                       as PriorityCriticality,
+
+      case status
+        when 'CANCELADO'    then 1 // Vermelho
+        when 'A INICIAR'    then 2 // Amarelo
+        when 'EM ANDAMENTO' then 3 // Verde
+        when 'EM TESTE'     then 2 // Amarelo
+        when 'ENCERRADO'    then 3 // Verde
+        else 0
+      end                       as StatusCriticality,
+
+      case status
+      when 'CANCELADO'    then 'sap-icon://sys-cancel'
+      when 'A INICIAR'    then 'sap-icon://activity-items'
+      when 'EM ANDAMENTO' then 'sap-icon://approvals'
+      when 'EM TESTE'     then 'sap-icon://time-account'
+      when 'ENCERRADO'    then 'sap-icon://activity-2'
+      else 'sap-icon://add-activity'
+      end                       as Icon,
+
+      // Se for liberado a exposição do OData V4 trocar o 'Alta' pelo
+      // Icon 'sap-icon://high-priority', pois o V2 não suporta renderizar
+      // imagens na grid 
+      @Semantics.imageUrl: true
+      case prioridade
+        when 'X' then 'Alta'
+        else 'Baixa'
+      end                       as PriorityIcon,
+
+      // Campos virtuais para contagem de status (preenchidos via determination)
+      cast( 0 as abap.int4 )    as CountEmAndamento,
+      cast( 0 as abap.int4 )    as CountEmTeste,
+      
+      _Anexos,
+      _Comentarios
+}
+
+
+
+
+
+
+
+
+
+
+
+
+@AbapCatalog.viewEnhancementCategory: [#NONE]
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Basic - Arquivos de Especificação'
+@Metadata.ignorePropagatedAnnotations: true
+@ObjectModel.usageType:{
+    serviceQuality: #X,
+    sizeCategory: #S,
+    dataClass: #MIXED
+}
+define view entity ZICDS_GESTAO_FILES
+  as select from ztbt_gest_files
+  association to parent ZICDS_GEST_FUNC as _Demanda on $projection.DemandUUID = _Demanda.DemandUuid
+{
+  key attachment_uuid as AttachmentUUID,
+  key demand_uuid     as DemandUUID,
+      filename        as Filename,
+      @Semantics.mimeType: true
+      mimetype        as Mimetype,
+      @Semantics.largeObject: {
+          mimeType: 'Mimetype',
+          fileName: 'Filename',
+          contentDispositionPreference: #ATTACHMENT,
+          acceptableMimeTypes: ['application/vnd.openxmlformats-officedocument.wordprocessingml.document','image/*', 'application/pdf']
+      }
+      file_content    as FileContent,
+      fize_size       as FileSize,
+      @Semantics.systemDateTime.createdAt: true
+      created_at      as CreatedAt,
+      @Semantics.user.createdBy: true
+      created_by      as CreatedBy,
+
+      /* Associações */
+      _Demanda
+}
+
+
+
+
+
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Consumption - Arquivos Demandas'
+@Metadata.ignorePropagatedAnnotations: false
+@Metadata.allowExtensions: true
+define view entity ZCCDS_GEST_FILE
+  as projection on ZICDS_GESTAO_FILES
+{
+  key AttachmentUUID,
+  key DemandUUID,
+      Filename,
+      Mimetype,
+      FileContent,
+      @Consumption.semanticObject: 'Attachment'
+      FileSize,
+      CreatedAt,
+      CreatedBy,
+      /* Associations */
+      _Demanda : redirected to parent ZCCDS_GEST_FUNC
+}
