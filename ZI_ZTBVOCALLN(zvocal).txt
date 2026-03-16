@@ -68,3 +68,118 @@ define root view entity ZI_ZTBVOCALLN
       _Company.Currency                             as Moeda,
       _Company.CompanyCodeName                      as CompanyName
 }
+
+
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Consumption - Controle Interface VOCALL - NOTA FISCAL'
+@Metadata.allowExtensions: true
+@Metadata.ignorePropagatedAnnotations: false
+@Search.searchable: true
+
+define root view entity ZC_ZTBVOCALLN
+  provider contract transactional_query
+  as projection on ZI_ZTBVOCALLN
+
+{
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+  key  Docnum,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+  key  Itnum,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       Nfenum,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Consumption.valueHelpDefinition: [ { entity: { name: 'I_CompanyCode', element: 'CompanyCode' } } ]
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       @UI.textArrangement: #TEXT_FIRST
+       @ObjectModel.text.element: [ 'CompanyName' ]
+       Bukrs,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Consumption.valueHelpDefinition: [ { entity: { name: 'I_Branch', element: 'Branch' } } ]
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       Branch,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       Serie,
+
+       @Consumption.filter.selectionType: #INTERVAL
+       @Consumption.filter.mandatory: true
+       Data,
+
+       @Consumption.filter.selectionType: #INTERVAL
+       @Semantics.time: true
+       Hora,
+
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       Status,
+
+       @UI.multiLineText: true
+       Message,
+       CodigoNota,
+       OrganizacaoVendas,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       Centro,
+       Documento,
+       CodigoEmpresa,
+
+       @Consumption.filter: { selectionType: #RANGE, multipleSelections: true }
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       OrdemVenda,
+       OrdemCompra,
+       DataNota,
+       CondicaoPagamento,
+       CodigoVendedor,
+       NomeVendedor,
+
+       @UI.multiLineText: true
+       Observacoes,
+       TotalNota,
+       Situacao,
+       Cancelada,
+       TipoDocument,
+
+       @Search.defaultSearchElement: true
+       @Search.fuzzinessThreshold: 0.8
+       @Consumption.valueHelpDefinition: [ { entity: { name: 'I_Material', element: 'Material' } } ]
+       Produto,
+
+       @UI.multiLineText: true
+       Descricao,
+       GrupoProd,
+
+       @UI.multiLineText: true
+       DescricaoGrupoProd,
+       Marca,
+
+       @UI.multiLineText: true
+       DescricaoMarca,
+       UnidMedida,
+       Quantidade,
+       VlrUnitario,
+       VlrTotal,
+       Moeda,
+
+       //Campos para Refino de UI
+       StatusCriticality,
+       CompanyName,
+       NfeTexto
+}
