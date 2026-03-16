@@ -1,0 +1,70 @@
+@AbapCatalog.viewEnhancementCategory: [ #NONE ]
+@AccessControl.authorizationCheck: #NOT_REQUIRED
+@EndUserText.label: 'Basic - Controle Interface VOCALL - NOTA FISCAL'
+@Metadata.ignorePropagatedAnnotations: true
+@ObjectModel.resultSet.sizeCategory: #XS
+@ObjectModel.usageType: { serviceQuality: #X, sizeCategory: #S, dataClass: #MIXED }
+
+define root view entity ZI_ZTBVOCALLN
+  as select from ztbvocalln  as a
+
+    join         ztbvocallni as b on b.docnum = a.docnum
+
+  association [0..*] to I_CompanyCode as _Company on $projection.Bukrs = _Company.CompanyCode
+
+{
+  key a.docnum                                      as Docnum,
+  key b.itmnum                                      as Itnum,
+
+      a.nfenum                                      as Nfenum,
+      
+      concat_with_space(
+      'Nº Nota Fiscal', ltrim( a.nfenum, '0' ), 1 ) as NfeTexto,
+
+      a.bukrs                                       as Bukrs,
+      a.branch                                      as Branch,
+      a.serie                                       as Serie,
+      a.data                                        as Data,
+      a.hora                                        as Hora,
+      a.status                                      as Status,
+
+      case a.status
+        when 'NOK' then 1   // Erro  -> vermelho (Negative)
+        when 'OK' then 3   // Sucesso-> verde (Positive)
+        else 0            // Neutro
+      end                                           as StatusCriticality,
+
+      a.message                                     as Message,
+      a.codigo_nota                                 as CodigoNota,
+      a.organizacao_vendas                          as OrganizacaoVendas,
+      a.centro                                      as Centro,
+      a.documento                                   as Documento,
+      a.codigo_empresa                              as CodigoEmpresa,
+      a.ordem_venda                                 as OrdemVenda,
+      a.ordem_compra                                as OrdemCompra,
+      a.data_nota                                   as DataNota,
+      a.condicao_pagamento                          as CondicaoPagamento,
+      a.codigo_vendedor                             as CodigoVendedor,
+      a.nome_vendedor                               as NomeVendedor,
+      a.observacoes                                 as Observacoes,
+
+      @Semantics.amount.currencyCode: 'Moeda'
+      a.total_nota                                  as TotalNota,
+
+      a.situacao                                    as Situacao,
+      a.cancelada                                   as Cancelada,
+      a.tipo_documento                              as TipoDocument,
+      b.produto                                     as Produto,
+      b.descricao                                   as Descricao,
+      b.grupo_produto                               as GrupoProd,
+      b.descricao_grupo_produto                     as DescricaoGrupoProd,
+      b.marca                                       as Marca,
+      b.descricao_marca                             as DescricaoMarca,
+      cast(b.unidade_medida as string3)             as UnidMedida,
+      cast(b.quantidade as abap.char(17))           as Quantidade,
+      cast(b.valor_unitario as abap.char(17))       as VlrUnitario,
+      cast(b.valor_total as abap.char(17))          as VlrTotal,
+
+      _Company.Currency                             as Moeda,
+      _Company.CompanyCodeName                      as CompanyName
+}
